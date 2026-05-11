@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from database import Base, engine
 import models.user
 import models.student
-from routers import auth, students
+from routers import auth, students, ai
 
 load_dotenv()
 
@@ -26,6 +26,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(students.router, prefix="/students", tags=["Students"])
+app.include_router(ai.router, prefix="/ai", tags=["AI"])
 
 @app.get("/")
 def root():
