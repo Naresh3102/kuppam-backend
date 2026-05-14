@@ -30,4 +30,4 @@ app.include_router(ai.router, prefix="/ai", tags=["AI"])
 
 @app.get("/")
 def root():
-    return {"message": "Student API is running"}
+    return {"message": "Student API is running fine"}
