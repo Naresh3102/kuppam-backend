@@ -6,26 +6,26 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from google import genai
 from google.genai import types
+import json
+from fastapi.responses import StreamingResponse
 
 from dependencies import get_current_user
 
 router = APIRouter()
 
-# ── Module-level setup ───────────────────────────────────────────────
 if not os.getenv("GEMINI_API_KEY"):
     raise RuntimeError("GEMINI_API_KEY is not set in .env")
 
 client = genai.Client()
 MODEL_NAME = "gemini-3.1-flash-lite"
-GENERATION_CONFIG = types.GenerateContentConfig(temperature=0.7, max_output_tokens=512)
+GENERATION_CONFIG = types.GenerateContentConfig(temperature=0.7)
 
 SYSTEM_CONTEXT = (
     "You are a helpful Python programming assistant for college students. "
     "Answer questions about Python, web development, and AI. "
-    "Keep responses under 200 words unless more detail is truly needed."
+    # "Keep responses under 200 words unless more detail is truly needed."
 )
 
-# ── Session management ───────────────────────────────────────────────
 chat_sessions: dict[int, object] = {}
 
 def get_or_create_session(user_id: int):
@@ -39,14 +39,12 @@ def get_or_create_session(user_id: int):
         )
     return chat_sessions[user_id]
 
-# ── Schemas for /chat ────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
 
 class ChatResponse(BaseModel):
     reply: str
 
-# ── POST /ai/chat ────────────────────────────────────────────────────
 @router.post("/chat", response_model=ChatResponse)
 def chat_with_ai(
     request: ChatRequest,
@@ -63,15 +61,10 @@ def chat_with_ai(
         print(f"[chat] Gemini error: {exc}")
         raise HTTPException(status_code=503, detail="AI service unavailable.")
 
-# ── DELETE /ai/chat/reset ────────────────────────────────────────────
 @router.delete("/chat/reset", status_code=204)
 def reset_chat(current_user=Depends(get_current_user)):
     chat_sessions.pop(current_user.id, None)
     return Response(status_code=204)
-
-
-# Add these schemas and route to routers/ai.py
-# (client, MODEL_NAME, GENERATION_CONFIG already defined above)
 
 class SummariseRequest(BaseModel):
     text: str = Field(min_length=20, max_length=5000)
@@ -102,8 +95,6 @@ def summarize_text(
     except Exception as exc:
         print(f"[summarize] Gemini error: {exc}")
         raise HTTPException(status_code=503, detail="AI service unavailable.")
-    
-# Add these schemas and route to routers/ai.py
 
 class ExplainRequest(BaseModel):
     topic: str = Field(min_length=2, max_length=300)
@@ -143,3 +134,45 @@ def explain_topic(
     except Exception as exc:
         print(f"[explain] Gemini error: {exc}")
         raise HTTPException(status_code=503, detail="AI service unavailable.")
+
+
+class StreamRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=1000)
+
+def stream_chat_response(user_id: int, message: str):
+    """
+    Generator: yields SSE events as Gemini produces tokens.
+    Uses the user's existing ChatSession so history is maintained.
+    """
+    session = get_or_create_session(user_id)
+    try:
+        for chunk in session.send_message_stream(message):
+            if chunk.text:
+                data = json.dumps({"chunk": chunk.text})
+                yield f"data: {data}\n\n"
+        yield "data: [DONE]\n\n"
+
+    except ValueError:
+        error = json.dumps({"error": "Content blocked — try rephrasing."})
+        yield f"data: {error}\n\n"
+        yield "data: [DONE]\n\n"
+
+    except Exception as exc:
+        print(f"[stream] Gemini error: {exc}")
+        error = json.dumps({"error": "AI service temporarily unavailable."})
+        yield f"data: {error}\n\n"
+        yield "data: [DONE]\n\n"
+
+@router.post("/stream")
+def stream_ai_response(
+    request: StreamRequest,
+    current_user=Depends(get_current_user),
+):
+    return StreamingResponse(
+        stream_chat_response(current_user.id, request.message),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )

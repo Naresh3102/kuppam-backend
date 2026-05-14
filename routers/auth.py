@@ -28,7 +28,7 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
 def login(user: UserCreate, db: Session = Depends(get_db)):
     found = db.query(User).filter(User.username == user.username).first()
     if not found or not verify_password(user.password, found.hashed_password):
-        raise HTTPException(status_code=400, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
     return {
         "access_token": create_access_token(found.username),
